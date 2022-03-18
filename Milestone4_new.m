@@ -32,6 +32,8 @@ conductor.diam = 0.642/12; %ft
 conductor.d = 1.5; %ft
 conductor.nb = 2; 
 
+[n_conductor1, n_conductor2] = find_neutral_cond_info();
+
 %Find More Line Data
 [line_lengths, phase_distance] = find_line_lengths(numLines);
 
@@ -55,8 +57,17 @@ off_diag = find_off_diag_elements(line_bus_connections, Y_lines, numLines, N, TX
 Ybus = find_Ybus_matrix(diagMatrix, off_diag, bus_connections, N);
 
 %Print Result
+bus_table_label_ex = "";
+for i = 1:N
+    single_bus_table_label = "Bus " + num2str(i);
+    bus_table_label_ex = [bus_table_label_ex single_bus_table_label];
+end
+bus_table_label = bus_table_label_ex(2:N+1);
+bus_table_label = convertStringsToChars(bus_table_label);
+disp(bus_table_label)
 disp("Ybus: ")
-disp(Ybus);
+Ybus_table = array2table(Ybus);
+disp(Ybus_table)
 
 %-----------Solving for Iterations-----------%
 
@@ -72,7 +83,7 @@ V_o = [1.0 1.0 1.0 1.0 1.0 1.0 1.0];
 delta = [0 0 0 0 0 0 0];
 
 %The amount of iterations to do
-number = 1;
+number = 50;
 
 %The convergence criteria in pu
 criteria = 0.0001;
@@ -82,16 +93,22 @@ counter = 0;
 
 %-----------------!!!!!!!!!!!!!!!!!!-------------
 
+%Newton 1, Fast Decoupled 2, DC Power 3
+flow_type = 2;
 
-%First Iteration from Flat Start
-[newV, newDelta, newcounter, met] = iteration(Ybus, V_o, delta, P, Q, N, criteria, counter, bus_type, Y_lines, line_bus_connections, numLines);
-disp("Converge?: " + met)
-
-%Continue until convergance or max iterations
-while(newcounter < number && met == false)
-    [newV, newDelta, newcounter, met] = iteration(Ybus, newV, newDelta, P, Q, N, criteria, newcounter, bus_type, Y_lines, line_bus_connections, numLines);
-    disp("Converge?: " + met)
+switch flow_type
+    case 1
+        %funciton for Newton Rasp
+        cap_set = 0;
+        newton_rasp_power_flow(Ybus, V_o, delta, P, Q, N, criteria, counter, bus_type, Y_lines, line_bus_connections, numLines, flow_type, cap_set, number);
+    case 2
+        %function for fast decoupled 
+        fast_decoupled_power_flow(Ybus, V_o, delta, P, Q, N, criteria, counter, bus_type, Y_lines, line_bus_connections, numLines, flow_type, number);
+    case 3
+        %function for DC Power Flow
+        
 end
+
 
 %------FUNCTIONS------%
 
@@ -562,8 +579,7 @@ function [mismatch, bus_type] = find_mismatch_matrix(Ybus, V_o, delta, P, Q, N, 
         end
             mismatch_P(k,1) = V_o(k) * result;
     end
-   
-    
+        
     result = 0;
     mismatch_Q = zeros(N, 1);
     
@@ -573,14 +589,6 @@ function [mismatch, bus_type] = find_mismatch_matrix(Ybus, V_o, delta, P, Q, N, 
             result = result + num;
         end
             mismatch_Q(k,1) = V_o(k) * result;
-    end
-    
-    for y = 1:N
-       if(bus_type(y) == 2)
-           if(mismatch_Q(y) > 1.75)
-              bus_type(y) = 0; 
-           end
-       end
     end
     
     mismatch_x = [mismatch_P ; mismatch_Q];
@@ -761,40 +769,70 @@ function J4 = find_J4(V_o, Ybus, delta, N)
     
 end
 
-function J = find_jacobian(V_o, Ybus, delta, N, bus_type) 
+function J = find_jacobian(V_o, Ybus, delta, N, bus_type, flow_type) 
 
+    if(flow_type == 1)
+        J1 = find_J1(V_o, Ybus, delta, N);
+        J2 = find_J2(V_o, Ybus, delta, N);
+        J3 = find_J3(V_o, Ybus, delta, N);
+        J4 = find_J4(V_o, Ybus, delta, N);
 
-    J1 = find_J1(V_o, Ybus, delta, N);
-    J2 = find_J2(V_o, Ybus, delta, N);
-    J3 = find_J3(V_o, Ybus, delta, N);
-    J4 = find_J4(V_o, Ybus, delta, N);
-    
-    J = [J1 J2; J3 J4];
-    
-    %Find slack bus 
-    for i = 1:N
-       if (bus_type(i) == 1)
-          %Delete row and column for slack bus
-           J(i, :) = [];
-           J(:, i) = [];
-           J((i+N-1), :) = [];
-           J(:, (i+N-1)) = [];
-       end
+        J = [J1 J2; J3 J4];
+
+        %Find slack bus 
+        for i = 1:N
+           if (bus_type(i) == 1)
+              %Delete row and column for slack bus
+               J(i, :) = [];
+               J(:, i) = [];
+               J((i+N-1), :) = [];
+               J(:, (i+N-1)) = [];
+           end
+        end
+
+        count = 2;
+
+        %Find PV and delete the row and column for each
+        for q = 1:N
+           if(bus_type(q) == 2)
+               J((q-count+N), :) = [];
+               J(:, (q-count+N)) = [];
+           end
+           count = count + 1;
+        end
     end
     
-    count = 2;
-    
-    %Find PV and delete the row and column for each
-    for q = 1:N
-       if(bus_type(q) == 2)
-           J((q-count+N), :) = [];
-           J(:, (q-count+N)) = [];
-       end
-       count = count + 1;
+    if(flow_type == 2)
+        
+        J1 = find_J1(V_o, Ybus, delta, N);
+        J4 = find_J4(V_o, Ybus, delta, N);
+
+        J = [J1; J4];
+
+        %Find slack bus 
+        for i = 1:N
+           if (bus_type(i) == 1)
+              %Delete row and column for slack bus
+               J(i, :) = [];
+               J(:, i) = [];
+           end
+        end
+
+        count = 2;
+
+        %Find PV and delete the row and column for each
+        for q = 1:N
+           if(bus_type(q) == 2)
+               J((q-count+N), :) = [];
+               J(:, (q-count+N)) = [];
+           end
+           count = count + 1;
+        end
     end
     
     disp("Jacobian: ")
-    disp(J)
+    J_table = array2table(J);
+    disp(J_table)
 
 end
 
@@ -817,22 +855,25 @@ function [V_delta_mismatch, newV, newDelta] = find_V_delta_mismatch(mismatch, J,
             mismatch_new(q) = mismatch(q+count,1);
         end
     end
+    
+    
     V_delta_mismatch = inv(J) * mismatch;
     
     for i = 1:N
         newV(i) = mismatch_new(i) + V_o(i);
     end
     for k = 1:N
-       newDelta(i) = mismatch_new(k+N) + delta(k);
+       newDelta(k) = mismatch_new(k+N) + delta(k);
     end
     
 end 
 
 function met = find_convergance(mismatch, criteria, N)
     mettemp = true;
+    disp(mismatch)
     for i = 1:N
         if(-1 * mismatch(i,1) <= criteria)
-            disp(mismatch(i,1))
+            %disp(mismatch(i,1))
         else
             mettemp = false;
         end
@@ -840,8 +881,20 @@ function met = find_convergance(mismatch, criteria, N)
     met = mettemp;
 end
 
-function print_results(V_delta_mismatch, mismatch, counter, P_x, Q_x, real_loss, reactive_loss, currents)
-    disp("For Iteration " + counter)
+function print_results(V_delta_mismatch, mismatch, counter, P_x, Q_x, real_loss, reactive_loss, currents, N)
+%     disp("For Iteration " + counter)
+%     delta_mismatch = V_delta_mismatch(N:end,1);
+%     disp(size(delta_mismatch))
+%     V_mismatch = V_delta_mismatch(1:N,1);
+%     disp(size(V_mismatch))
+%     P_mismatch = mismatch(1:N,1);
+%     disp(size(P_mismatch))
+%     Q_mismatch = mismatch(1,N:end);
+%     disp(size(Q_mismatch))
+%     values = {'Voltage Mismatch'; 'Angle Mismatch'; 'Real Power Mismatch'; 'Reactive Power Mismatch'; 'Real Power'; 'Reactive Power'};
+%     results1 = table(values, V_mismatch, delta_mismatch, P_mismatch, Q_mismatch, P_x, Q_x);
+%     disp(results1)
+     disp("For Iteration " + counter)
     disp("The Voltage and Angle Mismatch is: ")
     disp(V_delta_mismatch)
     disp("The Power Mismatch is: ")
@@ -856,30 +909,34 @@ function print_results(V_delta_mismatch, mismatch, counter, P_x, Q_x, real_loss,
     disp(abs(currents))
     disp("Angle of Currents: ")
     disp(angle(currents))
+
+    
 end
 
-function [newV, newDelta, newcounter, met] = iteration(Ybus, V_o, delta, P, Q, N, criteria, counter, bus_type, Y_lines, line_bus_connections, numLines)
+function [newV, newDelta, newcounter, met] = iteration(Ybus, V_o, delta, P, Q, N, criteria, counter, bus_type, Y_lines, line_bus_connections, numLines, flow_type)
         
         data = zeros(1,N);
-        for i = 1:N
-            data(i) = V_o(i) + delta(i);
-        end
+        
         
         [mismatch, bus_type] = find_mismatch_matrix(Ybus, V_o, delta, P, Q, N, bus_type);
 
-        J = find_jacobian(V_o, Ybus, delta, N, bus_type);
+        J = find_jacobian(V_o, Ybus, delta, N, bus_type, flow_type);
 
         [V_delta_mismatch, newV, newDelta] = find_V_delta_mismatch(mismatch, J, N, V_o, delta, bus_type);
         
         met = find_convergance(V_delta_mismatch, criteria, N);
         
+        for i = 1:N
+            data(i) = newV(i) + newDelta(i);
+        end
+
         currents = find_current_directions(Y_lines, data, N, line_bus_connections, numLines);
         
         [P_x, Q_x] = find_P_Q(Ybus, V_o, delta, N);
         
         [real_loss, reactive_loss] = find_losses(P_x, Q_x, N);
         
-        %print_results(V_delta_mismatch, mismatch, counter, P_x, Q_x, real_loss, reactive_loss, currents);
+        print_results(V_delta_mismatch, mismatch, counter, P_x, Q_x, real_loss, reactive_loss, currents, N);
         
         newcounter = counter+1;
 end
@@ -928,6 +985,9 @@ end
 function currents = find_current_directions(Ylines, data, N, line_bus_connections, numLines)
 
     currents = zeros(1,N);
+    disp(data)
+    disp("Ylines: ")
+    disp(Ylines)
 
     for i = 1:numLines
         count = 0;
@@ -951,9 +1011,89 @@ function currents = find_current_directions(Ylines, data, N, line_bus_connection
         end
         
         currents(i) = find_current(data(bus1), data(bus2), Ylines(i)); %1-2
+        disp(currents(i))
     end
 end 
 
 function I = find_current(V1, V2, Y) 
     I = (V1-V2)*Y;
 end 
+
+function Q = add_cap(Q_start, var)
+    Q = Q_start + var;
+end
+
+function newton_rasp_power_flow(Ybus, V_o, delta, P, Q, N, criteria, counter, bus_type, Y_lines, line_bus_connections, numLines, flow_type, cap_set, number)
+    
+    %Add capactior if needed
+    if(cap_set == 1)
+        disp("Turning on Capacitor")
+        bus_add_cap = 7;
+        var = .1;
+        Q(bus_add_cap) = add_cap(Q(bus_add_cap), var);
+        cap_set = 0;
+    end
+    
+    bus_add_cap = 0;
+    
+    %First Iteration from Flat Start
+    [newV, newDelta, newcounter, met] = iteration(Ybus, V_o, delta, P, Q, N, criteria, counter, bus_type, Y_lines, line_bus_connections, numLines, flow_type);
+    disp("Converge?: " + met)
+
+    %Continue until convergance or max iterations
+    while(newcounter < number && met == false)
+        [newV, newDelta, newcounter, met] = iteration(Ybus, newV, newDelta, P, Q, N, criteria, newcounter, bus_type, Y_lines, line_bus_connections, numLines, flow_type);
+        disp("Converge?: " + met)
+    end
+    
+    for y = 1:N
+        if(bus_type(y) == 2)
+            if(Q(y) > 1.75)
+                bus_type(y) = 0;
+                setQ = y;
+                cap_set = 1;
+                %Set the Q value of the bus
+                Q(setQ) = 1.75;
+            end
+        end
+    end
+    
+        %Return to compare with cap bank
+        if (cap_set == 1)
+            disp("Running Newton Raspson with Capacitor Bank Incorporated")
+            newton_rasp_power_flow(Ybus, V_o, delta, P, Q, N, criteria, counter, bus_type, Y_lines, line_bus_connections, numLines, flow_type, cap_set, number);
+        end 
+   
+end
+
+function fast_decoupled_power_flow(Ybus, V_o, delta, P, Q, N, criteria, counter, bus_type, Y_lines, line_bus_connections, numLines, flow_type, cap_set, number)
+   
+    %First Iteration from Flat Start
+    [newV, newDelta, newcounter, met] = iteration(Ybus, V_o, delta, P, Q, N, criteria, counter, bus_type, Y_lines, line_bus_connections, numLines, flow_type);
+    disp("Converge?: " + met)
+
+    %Continue until convergance or max iterations
+    while(newcounter < number && met == false)
+        [newV, newDelta, newcounter, met] = iteration(Ybus, newV, newDelta, P, Q, N, criteria, newcounter, bus_type, Y_lines, line_bus_connections, numLines, flow_type);
+        disp("Converge?: " + met)
+    end
+   
+end
+
+function [n_conductor1, n_conductor2] = find_neutral_cond_info()
+    n_conductor1.r = 0.385; %ohm/mi
+    n_conductor1.GMR = 0.0217; %ft
+    n_conductor1.diam = 0.642/12; %ft 
+    n_conductor1.d = 1.5; %ft
+    n_conductor1.nb = 2; 
+    
+    n_conductor2.r = 0.385; %ohm/mi
+    n_conductor2.GMR = 0.0217; %ft
+    n_conductor2.diam = 0.642/12; %ft 
+    n_conductor2.d = 1.5; %ft
+    n_conductor2.nb = 2; 
+end
+
+%function [pos_gen_matrix, neg_gen_matrix, zero_gen_matrix] = find generator_sequence_matrices()
+
+%end
