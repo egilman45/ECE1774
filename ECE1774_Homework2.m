@@ -3,34 +3,10 @@ clc
 % ECE1774 Homework 2
 
 %Problem 1
-
-%Positive Sequenece Impedance
-
-%Find Ybus and Invert to get Zbus
-%Define Given Impedances
-% impedance.generator = ;
-% impedance.transformer = .1;
-% impedance.line1 = 0.03;
-% impedance.line2 = 0.03;
-% impedance.line3 = 0.03;
-% impedance.line4 = 0.03;
-% impedance.load_bus3 = 0.05;
-% impedance.load_bus4 = 0.05;
-% impedance.load_bus5 = 0.05;
-
 N = 5;
 numLines = 9;
 
-% line_bus_connections = [0 1 1 0 0;
-%                         0 1 0 1 0;
-%                         0 0 1 0 1;
-%                         0 0 0 1 1;
-%                         1 1 0 0 0;
-%                         1 0 0 0 0
-%                         0 0 1 0 0;
-%                         0 0 0 0 1;
-%                         0 0 0 1 0];
-                    
+                 
 line_bus_connections = [0 0 0 0 1 1 0 0 0;
                         1 1 0 0 1 0 0 0 0;
                         1 0 1 0 0 0 1 0 0;
@@ -114,6 +90,19 @@ end
 disp('Zero Sequence Matrix:')
 disp(Zbus0)
 
+%Problem 4
+
+%Find the Fault Current and Bus Voltage at Bus 2 with Fault
+V_F = 1;
+fault_bus = 2;
+
+fault_currents = find_fault_currents(V_F, Zbus1, N);
+disp(' ')
+disp(['Fault Current at Bus 2: ' num2str(fault_currents(2)) ' Amps'])
+
+bus_voltages = find_bus_voltages(fault_bus, Zbus1, N, V_F);
+disp(['Bus Voltage at Bus 2: ' num2str(bus_voltages(2)) ' Volts'])
+
 %%%%%%%%%%Functions%%%%%%%%%%%%%
 function Zbus = find_Zbus(Ybus)
     Zbus = inv(Ybus);
@@ -178,3 +167,17 @@ function Ybus = find_Ybus_matrix(diagMatrix, off_diag, bus_connections, N)
     
 end 
 
+function fault_currents = find_fault_currents(V_F, Zbus, N)
+    
+    fault_currents = zeros(1,N);
+    for i = 1:N
+        fault_currents(i) = V_F/Zbus(i,i);
+    end
+end
+
+function bus_voltages = find_bus_voltages(fault_bus, Zbus, N, V_F)
+    bus_voltages = zeros(1,N);
+    for i = 1:N
+       bus_voltages(i) = (1 - (Zbus(i,fault_bus)/Zbus(fault_bus,fault_bus))) * V_F; 
+    end
+end
